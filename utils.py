@@ -1,22 +1,20 @@
+import psycopg2
 import requests
-import json
 
 
 def get_hh_data(employers_id: list):
-    """Получение данных о работадателях и вакансиях с помощью API hh.ru"""
+    """Получение данных о работодателях и вакансиях с помощью API hh.ru"""
     data = []
 
-    employers_data = []
     for employer_id in employers_id:
 
         response_emp = requests.get(f'https://api.hh.ru/employers/{employer_id}')
 
         employer_data = response_emp.json()
-        employers_data.append(employer_data)
 
         vacancies_data = []
         count_page = (int(employer_data['open_vacancies']) // 100) + 1
-        # Ограничение API на получение больше 2000 вакансий
+        # Ограничение API на получение вакансий. Не больше 2000 вакансий
         if count_page > 20:
             count_page = 20
 
@@ -34,7 +32,7 @@ def get_hh_data(employers_id: list):
             vacancies_data.extend(formatted_vacancies)
 
         data.append({
-            'employer': employers_data[0],
+            'employer': employer_data,
             'vacancies': vacancies_data
         })
 
@@ -50,17 +48,22 @@ def format_vacancies(vacancies: list):
         formatted_v['name'] = v['name']
 
         if v['salary'] is None:
-            formatted_v['salary_from'] = None
-            formatted_v['salary_to'] = None
+            formatted_v['salary'] = None
             formatted_v['currency'] = None
-        else:
-            formatted_v['salary_from'] = v['salary']['from']
-            formatted_v['salary_to'] = v['salary']['to']
+        elif (v['salary']['from'] is not None) and (v['salary']['to'] is not None):
+            formatted_v['salary'] = round((v['salary']['from'] + v['salary']['to']) / 2)
+            formatted_v['currency'] = v['salary']['currency']
+        elif v['salary']['from'] is not None:
+            formatted_v['salary'] = v['salary']['to']
+            formatted_v['currency'] = v['salary']['currency']
+        elif v['salary']['to'] is not None:
+            formatted_v['salary'] = v['salary']['from']
             formatted_v['currency'] = v['salary']['currency']
 
         formatted_v['city'] = None if v['address'] is None else v['address']['city']
         formatted_v['url'] = v['alternate_url']
         formatted_v['employer'] = v['employer']['name']
+        formatted_v['published_at'] = v['published_at']
         formatted_v['requirement'] = v['snippet']['requirement']
 
         formatted_vacancies.append(formatted_v)
@@ -68,9 +71,84 @@ def format_vacancies(vacancies: list):
     return formatted_vacancies
 
 
-def create_database(data_base_name: str, params):
-    pass
+def create_database(database_name: str, params):
+    """Создание базы данных и таблиц для сохранения данных о работадателях и вакансиях."""
+
+    conn = psycopg2.connect(dbname='postgres', **params)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    try:
+        cur.execute(f"DROP DATABASE {database_name}")
+        cur.execute(f"CREATE DATABASE {database_name}")
+    except psycopg2.errors.InvalidCatalogName:
+        cur.execute(f"CREATE DATABASE {database_name}")
+
+    conn.close()
+
+    conn = psycopg2.connect(dbname=database_name, **params)
+
+    with conn.cursor() as cur:
+        cur.execute("""
+                CREATE TABLE employers (
+                    employer_id SERIAL PRIMARY KEY,
+                    title VARCHAR(100) NOT NULL,
+                    url VARCHAR NOT NULL,
+                    site_url VARCHAR,
+                    city VARCHAR(50),
+                    description TEXT
+                )
+            """)
+
+    with conn.cursor() as cur:
+        cur.execute("""
+                CREATE TABLE vacancies (
+                    vacancy_id SERIAL PRIMARY KEY,
+                    employer_id INT REFERENCES employers(employer_id),
+                    title VARCHAR NOT NULL,
+                    salary INT,
+                    currency VARCHAR(5),
+                    city VARCHAR(50),
+                    url VARCHAR NOT NULL,
+                    publish_date DATE,
+                    requirement TEXT
+                )
+            """)
+
+    conn.commit()
+    conn.close()
 
 
-def save_data_to_database(data: list, data_base_name: str, params):
-    pass
+def save_data_to_database(data: list, database_name: str, params):
+    """Сохранение данных о работодателях и вакансиях в базу данных."""
+
+    conn = psycopg2.connect(dbname=database_name, **params)
+
+    with conn.cursor() as cur:
+        for employer in data:
+            employer_data = employer['employer']
+            cur.execute(
+                """
+                INSERT INTO employers (title, url, site_url, city, description)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING employer_id
+                """,
+                (employer_data['name'], employer_data['alternate_url'], employer_data['site_url'],
+                 employer_data['area']['name'], employer_data['description'])
+            )
+
+            employer_id = cur.fetchone()[0]
+            vacancies_data = employer['vacancies']
+            for vacancies in vacancies_data:
+                cur.execute(
+                    """
+                    INSERT INTO vacancies (employer_id, title, salary, currency,
+                    city, url, publish_date, requirement)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (employer_id, vacancies['name'], vacancies['salary'], vacancies['currency'],
+                     vacancies['city'], vacancies['url'], vacancies['published_at'], vacancies['requirement'])
+                )
+
+    conn.commit()
+    conn.close()
