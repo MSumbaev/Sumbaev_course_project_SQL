@@ -2,7 +2,7 @@ import psycopg2
 import requests
 
 
-def get_hh_data(employers_id: list):
+def get_hh_data(employers_id: list) -> list:
     """Получение данных о работодателях и вакансиях с помощью API hh.ru"""
     data = []
 
@@ -39,7 +39,7 @@ def get_hh_data(employers_id: list):
     return data
 
 
-def format_vacancies(vacancies: list):
+def format_vacancies(vacancies: list) -> list:
     """Форматирование данных о вакансиях"""
     formatted_vacancies = []
 
@@ -71,7 +71,7 @@ def format_vacancies(vacancies: list):
     return formatted_vacancies
 
 
-def create_database(database_name: str, params):
+def create_database(database_name: str, params) -> None:
     """Создание базы данных и таблиц для сохранения данных о работадателях и вакансиях."""
 
     conn = psycopg2.connect(dbname='postgres', **params)
@@ -119,7 +119,7 @@ def create_database(database_name: str, params):
     conn.close()
 
 
-def save_data_to_database(data: list, database_name: str, params):
+def save_data_to_database(data: list, database_name: str, params) -> None:
     """Сохранение данных о работодателях и вакансиях в базу данных."""
 
     conn = psycopg2.connect(dbname=database_name, **params)
